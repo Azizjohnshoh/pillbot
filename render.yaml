@@ -4,13 +4,13 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python pill_bot_ultra_pro_max_v3_5.py
+    startCommand: python pill_bot_ultra_pro_max_v3_6.py
     autoDeploy: true
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: OWNER_ID
-        value: "51662933"
+        sync: false
       - key: TZ
         value: "Asia/Tashkent"
       - key: PORT
