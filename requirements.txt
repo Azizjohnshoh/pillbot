@@ -3,3 +3,4 @@ aiosqlite
 APScheduler
 pytz
 gTTS
+httpx
