@@ -41,6 +41,7 @@ async def send_message(chat_id, text, reply_markup=None):
 
 
 async def send_voice(chat_id, text):
+    """Send a text-to-speech voice message (if enabled)."""
     try:
         mp3 = voicemod.text_to_speech(text, lang=VOICE_LANG)
         async with aiohttp.ClientSession() as session:
@@ -54,6 +55,7 @@ async def send_voice(chat_id, text):
 
 
 async def handle_start(chat_id, user_name):
+    """Send welcome message and main menu."""
     greeting = (
         "👋 Assalomu alaykum! Dori eslatish botiga hush kelibsiz!\n"
         "Men sizga dorilarni o‘z vaqtida ichishni eslataman.\n"
@@ -67,10 +69,11 @@ async def handle_start(chat_id, user_name):
 
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
+    """Main webhook entry point for Telegram updates."""
     data = await request.json()
     log.info("Incoming update: %s", data.get("message") or data.get("callback_query") or "[no message]")
 
-    # Handle text messages
+    # === Handle text messages ===
     if "message" in data:
         msg = data["message"]
         chat_id = msg["chat"]["id"]
@@ -82,7 +85,10 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             return {"ok": True}
 
         elif text.startswith("/help"):
-            help_text = "Bu bot dorilarni eslatish uchun mo‘ljallangan. /start bilan boshlang."
+            help_text = (
+                "Bu bot dorilarni eslatish uchun mo‘ljallangan.\n"
+                "Quyidagi menyu orqali dorilarni qo‘shing yoki sozlamalarni o‘zgartiring."
+            )
             background_tasks.add_task(send_message, chat_id, help_text)
             return {"ok": True}
 
@@ -98,7 +104,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             background_tasks.add_task(send_message, chat_id, f"Echo: {text}")
             return {"ok": True}
 
-    # Handle button callbacks
+    # === Handle inline button callbacks ===
     if "callback_query" in data:
         cq = data["callback_query"]
         chat_id = cq["message"]["chat"]["id"]
@@ -130,3 +136,10 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         return {"ok": True}
 
     return {"ok": True}
+
+
+# === Explicitly run FastAPI app via uvicorn when launched ===
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("webhook_app:app", host="0.0.0.0", port=8080)
