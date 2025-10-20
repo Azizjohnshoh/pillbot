@@ -1,11 +1,11 @@
 
-"""Voice notification helper using gTTS (example)"""
 from gtts import gTTS
-import os, tempfile
-
+import time, os
+VOICE_DIR = "voice"
+os.makedirs(VOICE_DIR, exist_ok=True)
 def text_to_speech(text, lang='uz'):
+    fn = f"tts_{int(time.time())}.mp3"
+    path = os.path.join(VOICE_DIR, fn)
     tts = gTTS(text=text, lang=lang)
-    fd, path = tempfile.mkstemp(suffix='.mp3')
-    os.close(fd)
     tts.save(path)
     return path
