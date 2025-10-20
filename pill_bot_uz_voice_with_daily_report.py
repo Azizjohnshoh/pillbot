@@ -3,13 +3,15 @@
 # Author: Azizjon Shoxnazarov
 # Features: Uptime monitor, autorestart, backup, scheduler recovery, voice TTS, DB reconnect, crash shield
 
-import asyncio, logging, os, aiosqlite, pytz, aiohttp, traceback, zipfile
-from datetime import datetime, timedelta
+import asyncio, logging, os, aiosqlite, pytz, aiohttp, zipfile
+from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger  
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from gtts import gTTS
 from aiohttp import web
+
 
 # ---------------- CONFIG ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
