@@ -1,135 +1,104 @@
 import asyncio
 import logging
-import aiosqlite
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from gtts import gTTS
 import os
 from datetime import datetime
-import pytz
-import http.server
-import socketserver
-import threading
-
-# ------------------- CONFIG -------------------
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or "YOUR_TELEGRAM_BOT_TOKEN"
-OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID") or "YOUR_OWNER_CHAT_ID"
-
-DB_PATH = "pillbot.db"
-TIMEZONE = pytz.timezone("Asia/Tashkent")
-
-# ------------------- LOGGING -------------------
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
+import httpx
+from gtts import gTTS
+
+# ============ CONFIG ============
+TOKEN = os.getenv("8274061170:AAEvxZdkIAI5bz10cgpHu6DO2ze8-rc1H3Y")
+OWNER_CHAT_ID = int(os.getenv("51662933", "0"))
+KEEP_ALIVE_PORT = int(os.getenv("PORT", 10000))
+
+# ============ LOGGING ============
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ------------------- DATABASE -------------------
-async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            time TEXT,
-            text TEXT
-        )
-        """)
-        await db.commit()
+# ============ TELEGRAM HANDLERS ============
 
-# ------------------- VOICE -------------------
-async def speak_text(text, filename="voice.mp3"):
-    tts = gTTS(text=text, lang="uz")
-    tts.save(filename)
-    return filename
-
-# ------------------- COMMANDS -------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Salom! Bu PillBot. /add yordamida dori eslatmasini qo‘shing.")
+    await update.message.reply_text("Salom! 💊 PillBot ishga tushdi. /add bilan eslatma qo‘shing!")
 
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("Foydalanish: /add HH:MM dori_nomi")
+async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Iltimos, dori nomi va vaqtni kiriting. Masalan: /add soat 9:00 vitamin C")
         return
+    await update.message.reply_text(f"Eslatma qo‘shildi: {text}")
 
-    time = context.args[0]
-    text = " ".join(context.args[1:])
-    user_id = update.message.chat_id
+async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Noma’lum buyruq. Faqat /start va /add ishlaydi.")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO reminders (user_id, time, text) VALUES (?, ?, ?)", (user_id, time, text))
-        await db.commit()
+# ============ JOBS ============
 
-    await update.message.reply_text(f"Eslatma qo‘shildi: {time} - {text}")
+async def daily_report():
+    if OWNER_CHAT_ID != 0:
+        app = Application.builder().token(TOKEN).build()
+        await app.bot.send_message(chat_id=OWNER_CHAT_ID, text="📅 Bugungi dori hisobotini tekshiring!")
+        logger.info("Daily report yuborildi.")
 
-async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.chat_id
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT time, text FROM reminders WHERE user_id = ?", (user_id,)) as cursor:
-            rows = await cursor.fetchall()
+# ============ KEEP-ALIVE ============
 
-    if not rows:
-        await update.message.reply_text("Sizda hozircha eslatmalar yo‘q.")
-        return
+async def keep_alive():
+    import aiohttp
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.get(f"http://localhost:{KEEP_ALIVE_PORT}")
+                logger.info("Keep-alive ping sent")
+        except Exception as e:
+            logger.warning(f"Keep-alive error: {e}")
+        await asyncio.sleep(600)  # 10 minut
 
-    msg = "\n".join([f"{time} - {text}" for time, text in rows])
-    await update.message.reply_text("Sizning eslatmalaringiz:\n" + msg)
+# ============ FAKE SERVER (Render uchun) ============
 
-# ------------------- DAILY REPORT -------------------
-async def daily_report(app):
-    text = "📋 Bugungi dori eslatmalari:\n"
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, time, text FROM reminders") as cursor:
-            reminders = await cursor.fetchall()
+async def fake_server():
+    from aiohttp import web
+    async def handle(request):
+        return web.Response(text="OK - PillBot is alive 💊")
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", KEEP_ALIVE_PORT)
+    await site.start()
+    logger.info(f"🌐 Fake server running on port {KEEP_ALIVE_PORT}")
 
-    if not reminders:
-        text += "Hech qanday eslatma topilmadi."
-    else:
-        for user_id, time, rtext in reminders:
-            text += f"👤 User {user_id}: {time} - {rtext}\n"
+# ============ MAIN LOOP ============
 
-    await app.bot.send_message(chat_id=OWNER_CHAT_ID, text=text)
-
-# ------------------- SCHEDULER -------------------
-async def check_reminders(app):
-    now = datetime.now(TIMEZONE).strftime("%H:%M")
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, text FROM reminders WHERE time = ?", (now,)) as cursor:
-            reminders = await cursor.fetchall()
-
-    for user_id, text in reminders:
-        voice_file = await speak_text(f"{text}ni ichish vaqti keldi!")
-        await app.bot.send_voice(chat_id=user_id, voice=open(voice_file, "rb"))
-        os.remove(voice_file)
-
-# ------------------- KEEP ALIVE -------------------
-def keep_alive():
-    PORT = int(os.getenv("PORT", 10000))
-    Handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"🌐 Fake server running on port {PORT}")
-        httpd.serve_forever()
-
-# ------------------- MAIN -------------------
 async def main():
-    await init_db()
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("list", list_reminders))
+    app.add_handler(CommandHandler("add", add_reminder))
+    app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(check_reminders, "interval", minutes=1, args=[app])
-    scheduler.add_job(daily_report, "cron", hour=8, minute=0, args=[app])
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(daily_report, "interval", hours=24)
     scheduler.start()
 
-    threading.Thread(target=keep_alive, daemon=True).start()
+    asyncio.create_task(fake_server())
+    asyncio.create_task(keep_alive())
 
-    print("✅ Bot ishga tushdi — Telegram'da /start deb yozing!")
     await app.run_polling()
 
+# ============ ENTRY POINT (Render fix) ============
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(main())
+        else:
+            loop.run_until_complete(main())
+    except RuntimeError:
+        asyncio.run(main())

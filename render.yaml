@@ -1,6 +1,15 @@
 services:
-  - type: worker
+  - type: web
     name: pillbot
     env: python
+    region: frankfurt
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python pill_bot_uz_voice_with_daily_report.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: OWNER_CHAT_ID
+        sync: false
+      - key: PORT
+        value: 10000
