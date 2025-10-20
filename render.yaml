@@ -4,14 +4,15 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python pill_bot_ultra_pro_max_v3_6.py
-    autoDeploy: true
+    startCommand: python pill_bot_ultra_pro_max_v3_9.py
     envVars:
       - key: BOT_TOKEN
-        sync: false
+        value: "8274061170:AAEvxZdkIAI5bz10cgpHu6DO2ze8-rc1H3Y"
       - key: OWNER_ID
-        sync: false
+        value: "51662933"
       - key: TZ
         value: "Asia/Tashkent"
+      - key: RENDER_URL
+        value: "https://pillbot-nery.onrender.com"
       - key: PORT
         value: "10000"
