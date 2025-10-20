@@ -1,18 +1,21 @@
+
 services:
   - type: web
     name: pillbot-ultra-pro-max
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python pill_bot_ultra_pro_max_v3_9.py
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python webhook_app.py"
     envVars:
-      - key: BOT_TOKEN
-        value: "8274061170:AAEvxZdkIAI5bz10cgpHu6DO2ze8-rc1H3Y"
-      - key: OWNER_ID
-        value: "51662933"
-      - key: TZ
-        value: "Asia/Tashkent"
-      - key: RENDER_URL
-        value: "https://pillbot-nery.onrender.com"
-      - key: PORT
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: ENABLE_VOICE
+        value: "True"
+      - key: VOICE_LANG
+        value: "uz"
+      - key: KEEPALIVE_PORT
         value: "10000"
+      - key: USE_WEBHOOK
+        value: "True"
+      - key: DEFAULT_TIMEZONE
+        value: "Asia/Tashkent"

@@ -1,0 +1,9 @@
+{
+  "ENABLE_VOICE": true,
+  "VOICE_LANG": "uz",
+  "KEEPALIVE_PORT": 10000,
+  "USE_WEBHOOK": true,
+  "WEBHOOK_URL": "https://pillbot-ultra-pro-max.onrender.com/webhook",
+  "DATABASE": "data/pillbot.db",
+  "DEFAULT_TIMEZONE": "Asia/Tashkent"
+}

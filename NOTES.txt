@@ -1,0 +1,11 @@
+
+KNOWN ISSUES:
+- 409 Conflict: caused by multiple processes calling getUpdates simultaneously. Use webhook mode or ensure single-poller when deploying.
+- Render free service: may sleep after ~15 minutes; KeepAlive server included but consider paid plan or use uptime monitor.
+- Timezone detection: sometimes resolves to Europe/Berlin; default timezone set to Asia/Tashkent in config_example.json.
+
+MIGRATION STEPS:
+1. Replace TELEGRAM_TOKEN in config_example.json or set TELEGRAM_TOKEN env var on Render.
+2. Run 'python utils/db.py' to initialize DB schema (aiosqlite) or run the example initialization.
+3. Use webhook_app.py + Render web service for webhook mode, or run bot.py for polling (only one instance).
+4. For voice notifications ensure gTTS works on your host; consider caching mp3 files locally.
