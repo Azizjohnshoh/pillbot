@@ -1,199 +1,174 @@
-#!/usr/bin/env python3
-# PillBot ULTRA — Render Stable Edition
-# Author: Azizjon Shoxnazarov
-# Features: Uptime monitor, autorestart, backup, scheduler recovery, voice TTS, DB reconnect, crash shield
-
-import asyncio, logging, os, aiosqlite, pytz, aiohttp, zipfile
-from datetime import datetime
+import asyncio
+import logging
+import aiosqlite
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger  
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from apscheduler.triggers.cron import CronTrigger
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from gtts import gTTS
-from aiohttp import web
+import os
+import httpx
 
+# ---------------- CONFIG ---------------- #
+BOT_TOKEN = "8274061170:AAEvxZdkIAI5bz10cgpHu6DO2ze8-rc1H3Y"
+OWNER_ID = 51662933
+DB_FILE = "pillbot.db"
+TIMEZONE = "Asia/Tashkent"
+BACKUP_HOUR = 23  # бэкап в 23:00 по Ташкенту
+KEEPALIVE_PORT = 10000
 
-# ---------------- CONFIG ----------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "51662933"))
-TIMEZONE = os.getenv("TZ", "Asia/Tashkent")
-PORT = int(os.getenv("PORT", "10000"))
-DB_PATH = "pillbot_ultra.db"
-DAILY_REPORT_HOUR = 9
-BACKUP_HOUR = 3
-KEEPALIVE_INTERVAL = 600
-PING_INTERVAL = 900  # 15 min uptime check
+# ---------------- LOGGING ---------------- #
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("PillBot")
-
-# ---------------- DATABASE ----------------
-async def get_db():
-    for _ in range(3):
-        try:
-            db = await aiosqlite.connect(DB_PATH)
-            await db.execute("PRAGMA journal_mode=WAL;")
-            return db
-        except Exception as e:
-            logger.warning(f"DB reconnect: {e}")
-            await asyncio.sleep(2)
-    raise RuntimeError("DB connection failed after 3 tries")
-
+# ---------------- DATABASE ---------------- #
 async def init_db():
-    db = await get_db()
-    await db.execute(f"""
-        CREATE TABLE IF NOT EXISTS schedules (
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            chat_id INTEGER,
-            hhmm TEXT,
-            label TEXT DEFAULT 'dori',
-            tz TEXT DEFAULT '{TIMEZONE}',
-            active INTEGER DEFAULT 1
+            text TEXT,
+            time TEXT
         )
-    """)
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS events (
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS backups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schedule_id INTEGER,
-            user_id INTEGER,
-            chat_id INTEGER,
-            date TEXT,
-            time TEXT,
-            label TEXT,
-            status TEXT,
-            created_at TEXT
+            timestamp TEXT
         )
-    """)
-    await db.commit()
-    await db.close()
+        """)
+        await db.commit()
 
-# ---------------- CORE FUNCTIONS ----------------
-def uz_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💊 Ichdim", callback_data="taken"),
-         InlineKeyboardButton("⏰ Kiyinga qoldirish", callback_data="skip")]
-    ])
+# ---------------- CORE FUNCTIONS ---------------- #
+async def add_reminder(user_id: int, text: str, time_str: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("INSERT INTO reminders (user_id, text, time) VALUES (?, ?, ?)", (user_id, text, time_str))
+        await db.commit()
 
-async def speak_text(text: str, filename="voice.ogg"):
-    tts = gTTS(text=text, lang="uz")
-    tts.save(filename)
-    return filename
+async def get_reminders():
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("SELECT user_id, text, time FROM reminders") as cursor:
+            return await cursor.fetchall()
 
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    user_id, chat_id, label = job.data
-    try:
-        msg = f"💊 Doringizni ichish vaqti keldi!\n👉 {label}"
-        await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=uz_keyboard())
-        voice_path = await speak_text(f"{label} doringizni ichish vaqti keldi")
-        await context.bot.send_voice(chat_id=chat_id, voice=open(voice_path, "rb"))
-    except Exception as e:
-        logger.error(f"Send reminder failed: {e}")
+async def delete_reminder(user_id: int, text: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("DELETE FROM reminders WHERE user_id = ? AND text = ?", (user_id, text))
+        await db.commit()
 
-async def add_schedule(user_id, chat_id, hhmm, label):
-    db = await get_db()
-    await db.execute("INSERT INTO schedules (user_id, chat_id, hhmm, label) VALUES (?, ?, ?, ?)",
-                     (user_id, chat_id, hhmm, label))
-    await db.commit()
-    await db.close()
-
-async def list_schedules(user_id):
-    db = await get_db()
-    cur = await db.execute("SELECT id, hhmm, label FROM schedules WHERE user_id=?", (user_id,))
-    data = await cur.fetchall()
-    await db.close()
-    return data
-
-# ---------------- COMMANDS ----------------
+# ---------------- TELEGRAM HANDLERS ---------------- #
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Salom! Men PillBot ULTRA.\n"
-                                    "Doringizni ichishni eslatib turaman.\n"
-                                    "Yangi jadval uchun /set 08:00 Paracetamol")
+    await update.message.reply_text("👋 Assalomu alaykum! Men PillBot Ultra Pro Max!\n"
+                                    "💊 /add — dori eslatmasi qo‘shish\n"
+                                    "🗓 /report — kunlik hisobot\n"
+                                    "🧠 /help — yordam")
 
-async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("⏰ Foydalanish: /set 08:00 Dori_nomi")
-        return
-    hhmm = context.args[0]
-    label = " ".join(context.args[1:])
-    user = update.message.from_user
-    await add_schedule(user.id, update.message.chat_id, hhmm, label)
-    await update.message.reply_text(f"✅ Jadval qo‘shildi: {hhmm} — {label}")
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("💊 Dori eslatmasi uchun /add so‘ng matn va vaqt yozing.\n"
+                                    "Masalan: /add Paratsetamol 20:00")
 
-async def list_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    data = await list_schedules(user.id)
-    if not data:
-        await update.message.reply_text("🕒 Jadval topilmadi.")
-        return
-    msg = "\n".join([f"{r[1]} — {r[2]}" for r in data])
-    await update.message.reply_text(f"📋 Sizning dori jadvallaringiz:\n{msg}")
-
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.data == "taken":
-        await q.edit_message_text("💊 Juda yaxshi! Doringiz ichildi ✅")
-    elif q.data == "skip":
-        await q.edit_message_text("⏰ Keyinga qoldirildi.")
-
-# ---------------- BACKUP + REPORT ----------------
-async def daily_backup(app):
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        zipname = f"backup_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
-        with zipfile.ZipFile(zipname, "w") as zf:
-            zf.write(DB_PATH)
-        await app.bot.send_document(chat_id=OWNER_ID, document=open(zipname, "rb"))
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text("❗ Format: /add <nomi> <soat:daq>")
+            return
+        text = " ".join(args[:-1])
+        time_str = args[-1]
+        await add_reminder(update.effective_user.id, text, time_str)
+        await update.message.reply_text(f"✅ Eslatma saqlandi: {text} ⏰ {time_str}")
     except Exception as e:
-        logger.error(f"Backup failed: {e}")
+        await update.message.reply_text(f"❌ Xatolik: {e}")
 
-async def daily_report(app):
-    msg = f"🕘 Kunlik hisobot: {datetime.now().strftime('%Y-%m-%d')}\n"
-    msg += "🔸 Dori eslatmalari bajarildi."
-    await app.bot.send_message(chat_id=OWNER_ID, text=msg)
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reminders = await get_reminders()
+    if not reminders:
+        await update.message.reply_text("📭 Hozircha eslatmalar yo‘q.")
+        return
+    msg = "\n".join([f"👤 {r[0]} — 💊 {r[1]} ⏰ {r[2]}" for r in reminders])
+    await update.message.reply_text(f"📋 Kunlik hisobot:\n\n{msg}")
 
-# ---------------- MONITORS ----------------
-async def keep_alive():
-    async def handle(request): return web.Response(text="OK")
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"🌐 KeepAlive server running on {PORT}")
+# ---------------- DAILY JOBS ---------------- #
+async def daily_report(app: Application):
+    reminders = await get_reminders()
+    if not reminders:
+        return
+    msg = "🗓 *Kunlik hisobot:*\n\n" + "\n".join([f"💊 {r[1]} ⏰ {r[2]}" for r in reminders])
+    await app.bot.send_message(chat_id=OWNER_ID, text=msg, parse_mode="Markdown")
 
-async def uptime_monitor(app):
+async def daily_backup(app: Application):
+    backup_file = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+    try:
+        import shutil
+        shutil.copy(DB_FILE, backup_file)
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("INSERT INTO backups (timestamp) VALUES (?)", (datetime.now().isoformat(),))
+            await db.commit()
+        await app.bot.send_message(chat_id=OWNER_ID, text=f"🧩 Backup tayyorlandi: `{backup_file}`", parse_mode="Markdown")
+    except Exception as e:
+        await app.bot.send_message(chat_id=OWNER_ID, text=f"⚠️ Backup xatolik: {e}")
+
+# ---------------- KEEPALIVE SERVER ---------------- #
+async def start_keepalive():
+    async def handle_request(reader, writer):
+        response = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nPillBot Ultra running!"
+        writer.write(response)
+        await writer.drain()
+        writer.close()
+    server = await asyncio.start_server(handle_request, "0.0.0.0", KEEPALIVE_PORT)
+    logger.info(f"🌐 KeepAlive server running on {KEEPALIVE_PORT}")
+    async with server:
+        await server.serve_forever()
+
+async def ping_uptime():
     while True:
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(f"https://{os.getenv('RENDER_EXTERNAL_URL', 'example.com')}") as r:
-                    logger.info(f"Uptime check: {r.status}")
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.get("https://pillbot-yourname.onrender.com")
         except Exception as e:
             logger.warning(f"Uptime ping failed: {e}")
-        await asyncio.sleep(PING_INTERVAL)
+        await asyncio.sleep(300)
 
-# ---------------- MAIN ----------------
+# ---------------- MAIN ---------------- #
 async def main():
     await init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
 
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("set", set_reminder))
-    app.add_handler(CommandHandler("list", list_all))
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("add", add_command))
+    app.add_handler(CommandHandler("report", report))
 
     scheduler = AsyncIOScheduler()
+    scheduler.add_job(daily_report, CronTrigger(hour=21), args=[app])
     scheduler.add_job(daily_backup, CronTrigger(hour=BACKUP_HOUR), args=[app])
-    scheduler.add_job(daily_report, CronTrigger(hour=DAILY_REPORT_HOUR), args=[app])
     scheduler.start()
 
-    asyncio.create_task(keep_alive())
-    asyncio.create_task(uptime_monitor(app))
+    await app.bot.send_message(chat_id=OWNER_ID, text="🚀 PillBot Ultra Pro Max ishga tushdi!")
 
-    await app.bot.send_message(chat_id=OWNER_ID, text="🔁 PillBot ULTRA restarted successfully 🚀")
-    await app.run_polling()
+    await asyncio.gather(
+        start_keepalive(),
+        ping_uptime(),
+        app.run_polling()
+    )
 
+# ---------- ENTRY POINT with loop safety ---------- #
 if __name__ == "__main__":
-    asyncio.run(main())
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(main())
+        else:
+            loop.run_until_complete(main())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
