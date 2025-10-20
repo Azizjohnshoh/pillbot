@@ -2,7 +2,7 @@ python-telegram-bot==20.6
 aiosqlite==0.18.0
 APScheduler==3.10.1
 pytz==2024.1
-aiohttp==3.8.4
+aiohttp==3.9.5
 gTTS==2.5.1
 uvicorn==0.22.0
 fastapi==0.95.2
