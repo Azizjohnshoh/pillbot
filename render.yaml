@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: pillbot
+    env: python
+    buildCommand: ""
+    startCommand: python pill_bot_uz_voice_fixed_latin_full_windows_auto_restart_notify_alert.py
