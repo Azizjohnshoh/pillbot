@@ -1,6 +1,7 @@
+
 services:
   - type: web
-    name: pillbot-4-2
+    name: pillbot-4-6
     env: python
     plan: free
     region: frankfurt
@@ -9,15 +10,15 @@ services:
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
+      - key: ADMIN_CHAT
+        value: ""
       - key: ENABLE_VOICE
         value: "True"
       - key: VOICE_LANG
         value: "uz"
+      - key: BASE_URL
+        value: "https://pillbot-ultra-pro-max.onrender.com"
       - key: DEFAULT_TIMEZONE
         value: "Asia/Tashkent"
-      - key: USE_WEBHOOK
-        value: "True"
-      - key: BASE_URL
-        value: "https://pillbot-4-2.onrender.com"
       - key: PORT
         value: "8080"
