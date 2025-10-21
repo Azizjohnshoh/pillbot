@@ -1,33 +1,47 @@
 
+"""PillBot 4.6 - Stable Webhook Edition
+Auto-registers webhook, self-pings Render, periodic webhook check,
+and runs Uvicorn to keep the process alive (suitable for Render Free).
+"""
 import os, asyncio, logging, json
 from datetime import datetime
 from fastapi import FastAPI, Request, BackgroundTasks
-import aiohttp
-import uvicorn
+import aiohttp, uvicorn
+
+# NOTE: This file assumes utils package (dbmod, schedmod, ui, voice, lang) exists in the repo.
 from utils import dbmod, schedmod, ui, voice, lang
-import bot_handlers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("pillbot")
+log = logging.getLogger("pillbot.webhook")
 
+# Config (read from environment)
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_CHAT = os.getenv("ADMIN_CHAT", "")
-BASE_URL = os.getenv("BASE_URL", "https://pillbot-ultra-pro-max.onrender.com")
+ADMIN_CHAT = os.getenv("ADMIN_CHAT", "")  # optional admin chat id for startup notice
+BASE_URL = os.getenv("BASE_URL", "https://pillbot-4-6.onrender.com")
 WEBHOOK_URL = f"{BASE_URL}/webhook"
 ENABLE_VOICE = os.getenv("ENABLE_VOICE", "True").lower() in ("1","true","yes")
 VOICE_LANG = os.getenv("VOICE_LANG", "uz")
 PORT = int(os.getenv("PORT", 8080))
+
+if not TOKEN:
+    raise RuntimeError("Missing TELEGRAM_TOKEN environment variable")
+
 BOT_API = f"https://api.telegram.org/bot{TOKEN}"
+
 app = FastAPI()
 
+# --- Helpers: send message and voice via Telegram API ---
 async def send_message(chat_id, text, reply_markup=None):
     payload = {"chat_id": chat_id, "text": text}
-    if reply_markup:
+    if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    async with aiohttp.ClientSession() as session:
-        await session.post(f"{BOT_API}/sendMessage", json=payload)
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(f"{BOT_API}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+        log.warning("send_message failed: %s", e)
 
-async def send_voice(chat_id, text, lang_code='uz'):
+async def send_voice(chat_id, text, lang_code="uz"):
     try:
         mp3 = voice.text_to_speech(text, lang=lang_code)
         async with aiohttp.ClientSession() as session:
@@ -35,147 +49,127 @@ async def send_voice(chat_id, text, lang_code='uz'):
                 data = aiohttp.FormData()
                 data.add_field("chat_id", str(chat_id))
                 data.add_field("voice", f, filename="tts.mp3", content_type="audio/mpeg")
-                await session.post(f"{BOT_API}/sendVoice", data=data)
+                await session.post(f"{BOT_API}/sendVoice", data=data, timeout=20)
         voice.cleanup_old()
     except Exception as e:
-        log.exception("Voice send failed: %s", e)
+        log.warning("send_voice failed: %s", e)
 
-# webhook and maintenance
-async def ensure_webhook():
+# --- Webhook maintenance ---
+async def ensure_webhook_once():
+    """Check current webhook and set it if missing / different."""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo") as resp:
+            async with session.get(f"{BOT_API}/getWebhookInfo", timeout=10) as resp:
                 data = await resp.json()
-                current = data["result"].get("url","")
-                if current != WEBHOOK_URL:
-                    async with session.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", data={"url": WEBHOOK_URL}) as r:
-                        log.info(await r.json())
+            if not data.get("ok"):
+                log.warning("getWebhookInfo not ok: %s", data)
+            current = data.get("result", {}).get("url", "")
+            if current != WEBHOOK_URL:
+                log.info("Webhook mismatch or empty, setting webhook -> %s", WEBHOOK_URL)
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"{BOT_API}/setWebhook", data={"url": WEBHOOK_URL}, timeout=15) as set_resp:
+                        res = await set_resp.json()
+                        log.info("setWebhook response: %s", res)
+            else:
+                log.info("Webhook already set and correct.")
     except Exception as e:
-        log.error("ensure_webhook error: %s", e)
+        log.warning("ensure_webhook_once error: %s", e)
 
 async def periodic_webhook_check():
+    """Periodically verify webhook (every 6 hours)."""
     while True:
-        await ensure_webhook()
-        await asyncio.sleep(6*60*60)
+        await ensure_webhook_once()
+        await asyncio.sleep(6 * 60 * 60)
 
-async def _self_ping():
+# --- Self-ping to keep Render Free alive ---
+async def self_ping_once():
     try:
-        async with aiohttp.ClientSession() as s:
-            await s.get(BASE_URL)
-    except:
-        pass
+        async with aiohttp.ClientSession() as session:
+            async with session.get(BASE_URL, timeout=10) as r:
+                if r.status == 200:
+                    log.info("Self-ping OK")
+                else:
+                    log.warning("Self-ping returned status %s", r.status)
+    except Exception as e:
+        log.warning("Self-ping failed: %s", e)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(initialize_app())
+# schedule helper that uses schedmod
+async def schedule_keepalive():
+    # schedmod.schedule_ping is used where APScheduler is available; ensure scheduler started
+    try:
+        schedmod.start_scheduler()
+        schedmod.schedule_ping(14, self_ping_once)
+    except Exception as e:
+        log.warning("schedule_keepalive error: %s", e)
 
-async def initialize_app():
-    log.info("Starting PillBot 4.6 Ultimate...")
-    await dbmod.ensure_schema(path="data/pillbot.db")
-    schedmod.start_scheduler()
-    schedmod.schedule_ping(14, _self_ping)
-    asyncio.create_task(ensure_webhook())
-    asyncio.create_task(periodic_webhook_check())
-    # notify admin/chat if set
-    if ADMIN_CHAT:
-        await send_message(ADMIN_CHAT, "✅ PillBot 4.6 started at " + datetime.utcnow().isoformat())
-        if ENABLE_VOICE:
-            await send_voice(ADMIN_CHAT, "PillBot ishga tushdi. Dori eslatish bot aktiv.", lang_code=VOICE_LANG)
-
-@app.get("/")
-async def root():
-    return {"status":"ok","time":datetime.utcnow().isoformat()}
+# --- FastAPI routes ---
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-    # process via bot_handlers (message flows)
+    log.debug("Incoming update keys: %s", list(data.keys()))
+    # Basic delegation: call handlers for message and callback processing
+    # Keep this lightweight: heavy tasks pushed to background_tasks
     try:
-        # message content
+        # messages
         if "message" in data:
-            # pass helper functions
-            await bot_handlers.handle_message(data, send_message, send_voice)
-        # callback_query (inline buttons)
+            # simple dispatcher: use bot_handlers if exists, otherwise basic reply
+            from bot_handlers import handle_message as _handle_message
+            background_tasks.add_task(_handle_message, data, send_message, send_voice)
+        # callback_query processing (inline buttons) handled inline for immediate ack
         if "callback_query" in data:
             cq = data["callback_query"]
             cid = cq.get("id")
+            payload = cq.get("data","")
             msg = cq.get("message",{})
             chat_id = msg.get("chat",{}).get("id")
-            payload = cq.get("data","")
-            # answer callback quickly
-            async with aiohttp.ClientSession() as session:
-                try:
-                    await session.post(f"{BOT_API}/answerCallbackQuery", json={"callback_query_id": cid})
-                except:
-                    pass
-            # minimal inline handling: start add flow and time/repeat/custom/back/settings
-            state, temp = await dbmod.get_state(chat_id)
-            lang_code, voice_on = await dbmod.get_user_prefs(chat_id)
-            T = lang.TEXT.get(lang_code, lang.TEXT['uz'])
-            if payload == "add_med":
-                await dbmod.set_state(chat_id, "awaiting_med_name", {})
-                await send_message(chat_id, T['ask_med_name'])
-            elif payload.startswith("time_"):
-                time_chosen = payload.split("_",1)[1]
-                # store and ask repeat
-                s, tdata = await dbmod.get_state(chat_id)
-                title = tdata.get("title") if tdata else None
-                if not title:
-                    # if no title, prompt for title
-                    await dbmod.set_state(chat_id, "awaiting_med_name", {})
-                    await send_message(chat_id, T['ask_med_name'])
-                else:
-                    await dbmod.set_state(chat_id, "awaiting_repeat", {"title": title, "time": time_chosen})
-                    await send_message(chat_id, T['ask_repeat'], reply_markup=ui.repeat_buttons(lang_code))
-            elif payload == "time_custom":
-                # ask to input custom time
-                s, tdata = await dbmod.get_state(chat_id)
-                await dbmod.set_state(chat_id, "awaiting_custom_time", tdata or {})
-                await send_message(chat_id, T['ask_custom_time'])
-            elif payload in ("repeat_daily","repeat_once"):
-                s, tdata = await dbmod.get_state(chat_id)
-                if not tdata:
-                    await send_message(chat_id, "Jarayon topilmadi. Iltimos boshidan boshlang.")
-                else:
-                    title = tdata.get("title")
-                    time_chosen = tdata.get("time")
-                    recurring = "daily" if payload=="repeat_daily" else "once"
-                    rid = await dbmod.add_reminder(chat_id, title, time_chosen, recurring)
-                    # schedule
-                    hh,mm = map(int, time_chosen.split(":"))
-                    schedmod.schedule_daily(rid, hh, mm, lambda cid, t=title: None, args=(chat_id, title))
-                    await send_message(chat_id, T['added'].format(title=title, time=time_chosen, recurring=recurring))
-                    # voice
-                    if voice_on:
-                        await send_voice(chat_id, T['added'].format(title=title, time=time_chosen, recurring=recurring), lang_code=lang_code)
-                    await dbmod.clear_state(chat_id)
-            elif payload == "my_meds":
-                meds = await dbmod.list_reminders_for_chat(chat_id)
-                if meds:
-                    for r in meds:
-                        await send_message(chat_id, f"{r['id']}: {r['title']} @ {r['time']} ({r.get('recurring')})")
-                else:
-                    await send_message(chat_id, T['no_meds'])
-            elif payload == "report":
-                meds = await dbmod.list_reminders_for_chat(chat_id)
-                total = len(meds)
-                text = T['report'].format(total=total)
-                await send_message(chat_id, text)
-            elif payload == "settings":
-                # send settings menu
-                await send_message(chat_id, T['settings'], reply_markup=ui.settings_menu(lang_code, voice_on=bool(voice_on)))
-            elif payload == "set_lang":
-                # toggle language
-                new_lang = 'ru' if lang_code=='uz' else 'uz'
-                await dbmod.set_user_prefs(chat_id, language=new_lang)
-                T2 = lang.TEXT.get(new_lang, lang.TEXT['uz'])
-                await send_message(chat_id, T2['lang_set'].format(lang=new_lang), reply_markup=ui.main_menu(new_lang))
-            elif payload == "toggle_voice":
-                new_voice = 0 if voice_on else 1
-                await dbmod.set_user_prefs(chat_id, voice_enabled=new_voice)
-                await send_message(chat_id, lang.TEXT.get(lang_code, lang.TEXT['uz'])['voice_off'] if new_voice==0 else lang.TEXT.get(lang_code, lang.TEXT['uz'])['voice_on'], reply_markup=ui.settings_menu(lang_code, voice_on=bool(new_voice)))
-            elif payload == "back":
-                await send_message(chat_id, ui.main_menu(lang_code), reply_markup=ui.main_menu(lang_code))
+            # quick answer callback to remove spinner
+            try:
+                async with aiohttp.ClientSession() as session:
+                    await session.post(f"{BOT_API}/answerCallbackQuery", json={"callback_query_id": cid}, timeout=5)
+            except Exception:
+                pass
+            # minimal inline handling fallback (delegated to bot_handlers in background)
+            from bot_handlers import handle_callback as _handle_callback
+            background_tasks.add_task(_handle_callback, cq, send_message, send_voice)
     except Exception as e:
-        log.exception("Webhook handling failed: %s", e)
+        log.exception("Error processing update: %s", e)
     return {"ok": True}
+
+# --- Startup / initialization ---
+@app.on_event("startup")
+async def startup_event():
+    # Run initialization in background so FastAPI becomes responsive immediately
+    asyncio.create_task(initialize_app())
+
+async def initialize_app():
+    log.info("Initializing PillBot 4.6 (Stable Webhook)...")
+    try:
+        await dbmod.ensure_schema(path="data/pillbot.db")
+    except Exception as e:
+        log.warning("DB ensure_schema failed: %s", e)
+    # start scheduler and keepalive
+    try:
+        await schedule_keepalive()
+    except Exception as e:
+        log.warning("schedule_keepalive failed: %s", e)
+    # ensure webhook and periodic checker
+    asyncio.create_task(ensure_webhook_once())
+    asyncio.create_task(periodic_webhook_check())
+    # notify admin (if configured)
+    if ADMIN_CHAT:
+        try:
+            await send_message(ADMIN_CHAT, f"✅ PillBot 4.6 (Webhook Stable) started at {datetime.utcnow().isoformat()}")
+            if ENABLE_VOICE:
+                await send_voice(ADMIN_CHAT, "PillBot ishga tushdi. Dori eslatish bot aktiv.", lang_code=VOICE_LANG)
+        except Exception as e:
+            log.warning("Admin notify failed: %s", e)
+    log.info("Initialization tasks scheduled. Webhook: %s", WEBHOOK_URL)
+
+# --- Keep the process alive by running Uvicorn when executed directly ---
+if __name__ == "__main__":
+    log.info("Starting Uvicorn: PillBot 4.6 (Webhook Stable) on port %s", PORT)
+    uvicorn.run("webhook_app:app", host="0.0.0.0", port=PORT, log_level="info")
