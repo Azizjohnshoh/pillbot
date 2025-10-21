@@ -1,24 +1,12 @@
-
 services:
   - type: web
-    name: pillbot-4-6
+    name: pillbot-ultra-promax
     env: python
     plan: free
-    region: frankfurt
-    buildCommand: "pip install --no-cache-dir --prefer-binary -r requirements.txt"
-    startCommand: "python webhook_app.py"
+    buildCommand: ""
+    startCommand: "python main.py"
     envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
-      - key: ADMIN_CHAT
-        value: ""
-      - key: ENABLE_VOICE
-        value: "True"
-      - key: VOICE_LANG
-        value: "uz"
-      - key: BASE_URL
-        value: "https://pillbot-ultra-pro-max.onrender.com"
-      - key: DEFAULT_TIMEZONE
-        value: "Asia/Tashkent"
+      - key: WEBHOOK_URL
+        value: https://pillbot-ultra-promax.onrender.com/webhook
       - key: PORT
-        value: "8080"
+        value: 10000

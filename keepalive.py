@@ -1,16 +1,11 @@
-
-import json, os
 from aiohttp import web
-cfg = {}
-try:
-    with open('config_example.json','r',encoding='utf-8') as f:
-        cfg = json.load(f)
-except Exception:
-    cfg = {}
-PORT = int(os.getenv("KEEPALIVE_PORT", cfg.get("KEEPALIVE_PORT", 10000)))
-async def handle(req):
-    return web.Response(text='PillBot KeepAlive OK')
-app = web.Application()
-app.router.add_get('/', handle)
-if __name__ == '__main__':
-    web.run_app(app, port=PORT)
+import os
+
+async def handle(request):
+    return web.Response(text="PillBot Ultra Pro Max v4.6 — alive")
+
+def run_keepalive():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    port = int(os.environ.get("PORT", 10000))
+    web.run_app(app, host="0.0.0.0", port=port)
