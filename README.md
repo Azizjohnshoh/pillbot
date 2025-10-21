@@ -18,6 +18,12 @@ Bot to‘liq tayyor **Webhook** arxitekturasi bilan ishlaydi, Render.com’da ba
 
 ---
 
+## 🚀 Deploy to Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Azizjohnshoh/pillbot)
+
+---
+
 ## ⚙️ Muhit sozlamalari (Environment Variables)
 
 | Kalit | Tavsif | Standart qiymat |
