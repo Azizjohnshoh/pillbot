@@ -9,3 +9,10 @@ def text_to_speech(text, lang='uz'):
     tts = gTTS(text=text, lang=lang)
     tts.save(path)
     return path
+def cleanup_old(limit=50):
+    files = sorted([os.path.join(VOICE_DIR,f) for f in os.listdir(VOICE_DIR)], key=os.path.getmtime)
+    while len(files) > limit:
+        try:
+            os.remove(files.pop(0))
+        except Exception:
+            break

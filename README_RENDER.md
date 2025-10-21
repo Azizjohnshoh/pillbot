@@ -1,1 +1,1 @@
-Use the Deploy to Render button in the top-level README to deploy.
+Use Deploy to Render button and set TELEGRAM_TOKEN, then set webhook.

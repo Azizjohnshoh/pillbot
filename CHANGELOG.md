@@ -1,2 +1,4 @@
-# v4.3
-- Merged all features; greeting updated.
+# v4.4 Interactive
+- Interactive add flow
+- Self-ping every 14 minutes
+- Settings menu scaffold

@@ -17,5 +17,7 @@ services:
         value: "10000"
       - key: USE_WEBHOOK
         value: "True"
+      - key: BASE_URL
+        value: "https://pillbot-ultra-pro-max.onrender.com"
       - key: DEFAULT_TIMEZONE
         value: "Asia/Tashkent"
