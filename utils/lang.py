@@ -1,17 +1,14 @@
-
-# Simple translations for Uzbek (uz) and Russian (ru)
 TEXT = {
     "uz": {
         "greeting": "👋 Assalomu alaykum! Dori eslatish botiga hush kelibsiz!",
-        "start_menu": "Quyidagi menyudan tanlang:",
+        "start_menu": "Quyidagi menyudan kerakli bo‘limni tanlang:",
         "ask_med_name": "💊 Dori nomini kiriting (misol: Paracetamol)",
         "ask_time": "⏰ Qachon ichasiz? Tanlang yoki o‘zingiz kiriting:",
         "ask_custom_time": "🕐 Iltimos, vaqtni HH:MM formatda kiriting (masalan: 18:45)",
         "ask_repeat": "🔁 Qaytarilish turi?",
         "added": "✅ Dori qo'shildi: {title} @ {time} ({recurring})",
         "no_meds": "Hech qanday dori topilmadi.",
-        "report": "📊 Sizning hisobot:
-💊 Dorilar soni: {total}",
+        "report": "📊 Sizning hisobot:\n💊 Dorilar soni: {total}",
         "settings": "⚙️ Sozlamalar:",
         "lang_set": "Til o'zgartirildi: {lang}",
         "voice_on": "🔊 Ovozli eslatmalar yoqildi",
@@ -27,8 +24,7 @@ TEXT = {
         "ask_repeat": "🔁 Тип повтора?",
         "added": "✅ Напоминание добавлено: {title} @ {time} ({recurring})",
         "no_meds": "Ничего не найдено.",
-        "report": "📊 Ваш отчет:
-💊 Количество лекарств: {total}",
+        "report": "📊 Ваш отчет:\n💊 Количество лекарств: {total}",
         "settings": "⚙️ Настройки:",
         "lang_set": "Язык изменён: {lang}",
         "voice_on": "🔊 Голосовые уведомления включены",
