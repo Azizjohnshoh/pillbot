@@ -1,10 +1,10 @@
-
 services:
   - type: web
-    name: pillbot-4-4-interactive
+    name: pillbot-4-2
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
+    region: frankfurt
+    buildCommand: "pip install --no-cache-dir --prefer-binary -r requirements.txt"
     startCommand: "python webhook_app.py"
     envVars:
       - key: TELEGRAM_TOKEN
@@ -13,11 +13,11 @@ services:
         value: "True"
       - key: VOICE_LANG
         value: "uz"
-      - key: KEEPALIVE_PORT
-        value: "10000"
+      - key: DEFAULT_TIMEZONE
+        value: "Asia/Tashkent"
       - key: USE_WEBHOOK
         value: "True"
       - key: BASE_URL
-        value: "https://pillbot-ultra-pro-max.onrender.com"
-      - key: DEFAULT_TIMEZONE
-        value: "Asia/Tashkent"
+        value: "https://pillbot-4-2.onrender.com"
+      - key: PORT
+        value: "8080"
