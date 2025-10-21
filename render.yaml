@@ -1,7 +1,7 @@
 
 services:
   - type: web
-    name: pillbot-ultra-pro-max
+    name: pillbot-4-4-interactive
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"

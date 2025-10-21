@@ -1,1 +1,1 @@
-v4.4 Interactive build: self-ping 14 minutes, interactive add flow, voice by default.
+PillBot 4.4 Interactive+ TimeChoice Edition: dynamic time buttons, custom time option, user_state, self-ping every 14 minutes.

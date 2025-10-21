@@ -1,4 +1,4 @@
-# v4.4 Interactive
-- Interactive add flow
+# v4.4 Interactive+
+- Added state machine and custom time input
+- Faster buttons via answerCallbackQuery
 - Self-ping every 14 minutes
-- Settings menu scaffold

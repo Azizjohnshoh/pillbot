@@ -1,5 +1,6 @@
 
-import aiosqlite, os, datetime
+import aiosqlite, os, json, datetime
+
 DB = "data/pillbot.db"
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users (
@@ -16,6 +17,12 @@ CREATE TABLE IF NOT EXISTS reminders (
     time TEXT,
     recurring TEXT,
     created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS user_state (
+    user_id INTEGER PRIMARY KEY,
+    state TEXT,
+    temp_data TEXT,
+    updated_at TEXT
 );
 '''.strip()
 
@@ -40,6 +47,30 @@ async def ensure_user(telegram_id, name=None):
         cur = await db.execute("SELECT id FROM users WHERE telegram_id=?", (telegram_id,))
         row = await cur.fetchone()
         return row[0]
+
+# state management
+async def set_state(telegram_id, state, temp_data=None):
+    now = datetime.datetime.utcnow().isoformat()
+    td = json.dumps(temp_data) if temp_data is not None else None
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("INSERT OR REPLACE INTO user_state (user_id,state,temp_data,updated_at) VALUES ((SELECT id FROM users WHERE telegram_id=?),?,?,?)",
+                         (telegram_id, state, td, now))
+        await db.commit()
+
+async def get_state(telegram_id):
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT state, temp_data FROM user_state WHERE user_id=(SELECT id FROM users WHERE telegram_id=?)", (telegram_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None, None
+        state = row[0]
+        td = json.loads(row[1]) if row[1] else None
+        return state, td
+
+async def clear_state(telegram_id):
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("DELETE FROM user_state WHERE user_id=(SELECT id FROM users WHERE telegram_id=?)", (telegram_id,))
+        await db.commit()
 
 async def add_reminder(telegram_id, title, time_str, recurring=None):
     user_id = await ensure_user(telegram_id)
