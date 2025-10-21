@@ -236,6 +236,25 @@ async def _send_reminder(chat_id, title):
         await send_voice(chat_id, text)
 
 # run uvicorn
+import asyncio
+import uvicorn
+import os
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(initialize_app())
+
+async def initialize_app():
+    log.info("🚀 Starting PillBot 4.4 Interactive+...")
+    try:
+        await dbmod.ensure_schema(path="data/pillbot.db")
+        schedmod.start_scheduler()
+        schedmod.schedule_ping(14, _self_ping)
+        log.info("✅ Scheduler started and self-ping active.")
+    except Exception as e:
+        log.error(f"Startup error: {e}")
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("webhook_app:app", host="0.0.0.0", port=8080)
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run("webhook_app:app", host="0.0.0.0", port=port, log_level="info")
+
