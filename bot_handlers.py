@@ -1,136 +1,163 @@
+
 import asyncio, re
 from datetime import datetime
-from utils import dbmod, ui, lang
+from utils import dbmod, ui, lang, voice
 
-# Primary handlers used by webhook_app
+# --- Constants ---
+DEFAULT_LANG = "uz"
+TIME_CHOICES = ["08:00", "12:00", "18:00", "22:00"]
+
+# --- Helpers ---
+async def _get_user_prefs(chat_id):
+    # should return (lang_code, voice_enabled)
+    try:
+        prefs = await dbmod.get_user_prefs(chat_id)
+        if prefs:
+            return prefs[0] or DEFAULT_LANG, bool(prefs[1])
+    except Exception:
+        pass
+    return DEFAULT_LANG, True
+
+# --- Message handler ---
 async def handle_message(update, send_message, send_voice):
     msg = update.get("message", {})
-    chat_id = msg.get("chat", {}).get("id")
-    text = msg.get("text", "").strip() if msg.get("text") else ""
-    from_user = msg.get("from", {}).get("first_name", "")
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    text = (msg.get("text") or "").strip()
 
-    # ensure user exists
-    await dbmod.ensure_user(chat_id, from_user)
+    # ensure user in DB
+    try:
+        await dbmod.ensure_user(chat_id, chat.get("first_name", ""))
+    except Exception:
+        pass
 
-    # if /start command
+    # /start handling (greet only first time: if user has no reminders)
     if text.startswith("/start"):
-        # greet only if user has no reminders (first time)
         meds = await dbmod.list_reminders_for_chat(chat_id)
-        T = lang.TEXT.get((await dbmod.get_user_prefs(chat_id))[0], lang.TEXT['uz'])
+        lang_code, voice_on = await _get_user_prefs(chat_id)
+        T = lang.TEXT.get(lang_code, lang.TEXT[DEFAULT_LANG])
         if not meds:
-            await send_message(chat_id, T['greeting'] + "\n" + T['start_menu'], reply_markup=ui.main_menu('uz'))
-            if (await dbmod.get_user_prefs(chat_id))[1] and send_voice:
-                await send_voice(chat_id, T['greeting'], lang_code=(await dbmod.get_user_prefs(chat_id))[0])
+            await send_message(chat_id, T["greeting"] + "\n" + T["start_menu"], reply_markup=ui.main_menu(lang_code))
+            if voice_on:
+                await send_voice(chat_id, T["greeting"], lang_code=lang_code)
         else:
-            await send_message(chat_id, T['start_menu'], reply_markup=ui.main_menu((await dbmod.get_user_prefs(chat_id))[0]))
+            await send_message(chat_id, T["start_menu"], reply_markup=ui.main_menu(lang_code))
         return
 
-    # handle free-text quick add: "Dori:Name,HH:MM"
-    if text.lower().startswith("dori:") or text.lower().startswith("add:"):
-        try:
-            parts = text.split(":",1)[1].split(",")
-            title = parts[0].strip()
-            time_str = parts[1].strip() if len(parts)>1 else "08:00"
-            rid = await dbmod.add_reminder(chat_id, title, time_str, "once")
-            T = lang.TEXT.get((await dbmod.get_user_prefs(chat_id))[0], lang.TEXT['uz'])
-            await send_message(chat_id, T['added'].format(title=title, time=time_str, recurring="once"))
-            if (await dbmod.get_user_prefs(chat_id))[1]:
-                await send_voice(chat_id, T['added'].format(title=title, time=time_str, recurring="once"), lang_code=(await dbmod.get_user_prefs(chat_id))[0])
-        except Exception:
-            await send_message(chat_id, "Format xato. Iltimos: Dori: Nomi, HH:MM")
-        return
-
-    # if user is in a state waiting for custom time/name etc - defer to dbmod.get_state
+    # If user sending name while in "awaiting_med_name" state
     state, temp = await dbmod.get_state(chat_id)
+    if state == "awaiting_med_name":
+        title = text
+        await dbmod.set_state(chat_id, "awaiting_med_time", {"title": title})
+        # show time choices
+        kb = {"inline_keyboard": [[{"text": t, "callback_data": f"time_{t}"}] for t in TIME_CHOICES] + [[{"text":"🕓 Boshqa vaqt kiritish","callback_data":"custom_time"}]]}
+        await send_message(chat_id, "⏰ Qachon ichasiz? Tanlang yoki 'Boshqa vaqt' tugmasi orqali kiriting.", reply_markup=kb)
+        return
+
+    # If user sending custom time while in awaiting_custom_time
     if state == "awaiting_custom_time":
         if re.match(r'^(?:[01]\d|2[0-3]):[0-5]\d$', text):
-            title = temp.get("title") if temp else "NoName"
-            time_str = text
-            await dbmod.add_reminder(chat_id, title, time_str, "once")
-            T = lang.TEXT.get((await dbmod.get_user_prefs(chat_id))[0], lang.TEXT['uz'])
-            await send_message(chat_id, T['added'].format(title=title, time=time_str, recurring="once"))
-            if (await dbmod.get_user_prefs(chat_id))[1]:
-                await send_voice(chat_id, T['added'].format(title=title, time=time_str, recurring="once"), lang_code=(await dbmod.get_user_prefs(chat_id))[0])
+            title = (temp or {}).get("title", "NoName")
+            await dbmod.add_reminder(chat_id, title, text, "daily")
             await dbmod.clear_state(chat_id)
+            lang_code, voice_on = await _get_user_prefs(chat_id)
+            T = lang.TEXT.get(lang_code, lang.TEXT[DEFAULT_LANG])
+            msg = T["added"].format(title=title, time=text, recurring="daily")
+            await send_message(chat_id, msg)
+            if voice_on:
+                await send_voice(chat_id, msg, lang_code=lang_code)
         else:
-            T = lang.TEXT.get((await dbmod.get_user_prefs(chat_id))[0], lang.TEXT['uz'])
-            await send_message(chat_id, T['ask_custom_time'])
+            lang_code, _ = await _get_user_prefs(chat_id)
+            T = lang.TEXT.get(lang_code, lang.TEXT[DEFAULT_LANG])
+            await send_message(chat_id, T["ask_custom_time"])
         return
 
-    # fallback echo
-    if text:
-        await send_message(chat_id, "Echo: " + text)
+    # fallback: help hint
+    await send_message(chat_id, "ℹ️ Buyruqni tanlang yoki menyudan foydalaning.", reply_markup=ui.main_menu(await _get_user_prefs(chat_id)[0]))
 
-
+# --- Callback handler ---
 async def handle_callback(callback, send_message, send_voice):
     cq = callback
     data = cq.get("data","")
     msg = cq.get("message",{})
-    chat_id = msg.get("chat",{}).get("id")
-    T = lang.TEXT.get((await dbmod.get_user_prefs(chat_id))[0], lang.TEXT['uz'])
+    chat = msg.get("chat",{})
+    chat_id = chat.get("id")
+    lang_code, voice_on = await _get_user_prefs(chat_id)
+    T = lang.TEXT.get(lang_code, lang.TEXT[DEFAULT_LANG])
 
-    # Main menu
-    if data == "add_med":
+    # --- main menu buttons (names aligned to ui.main_menu) ---
+    if data == "add_medication":
         await dbmod.set_state(chat_id, "awaiting_med_name", {})
-        await send_message(chat_id, T['ask_med_name'])
+        await send_message(chat_id, T["ask_med_name"])
         return
 
-    if data == "my_meds":
+    if data == "show_meds":
         meds = await dbmod.list_reminders_for_chat(chat_id)
         if not meds:
-            await send_message(chat_id, T['no_meds'])
+            await send_message(chat_id, T["no_meds"])
         else:
-            for r in meds:
-                await send_message(chat_id, f"{r['id']}: {r['title']} @ {r['time']} [{r.get('recurring')}]")
+            lines = [f\"{r['id']}: {r['title']} — {r['time']}\" for r in meds]
+            await send_message(chat_id, "📋 " + "\\n".join(lines))
         return
 
-    if data == "report":
+    if data == "show_report":
         meds = await dbmod.list_reminders_for_chat(chat_id)
-        await send_message(chat_id, T['report'].format(total=len(meds)))
+        await send_message(chat_id, T["report"].format(total=len(meds)))
         return
 
-    if data == "settings":
-        await send_message(chat_id, T['settings'], reply_markup=ui.settings_menu((await dbmod.get_user_prefs(chat_id))[0], voice_on=bool((await dbmod.get_user_prefs(chat_id))[1])))
+    if data == "settings_menu":
+        await send_message(chat_id, T["settings"], reply_markup=ui.settings_menu(lang_code, voice_on=voice_on))
         return
 
-    # time chosen from inline buttons: time_HH:MM
-    if data.startswith("time_"):
-        time_chosen = data.split("_",1)[1]
-        state, temp = await dbmod.get_state(chat_id)
-        title = temp.get("title") if temp else None
-        if not title:
-            await send_message(chat_id, T['ask_med_name'])
-            await dbmod.set_state(chat_id, "awaiting_med_name", {})
-            return
-        await dbmod.add_reminder(chat_id, title, time_chosen, "daily")
-        await dbmod.clear_state(chat_id)
-        await send_message(chat_id, T['added'].format(title=title, time=time_chosen, recurring="daily"))
-        if (await dbmod.get_user_prefs(chat_id))[1]:
-            await send_voice(chat_id, T['added'].format(title=title, time=time_chosen, recurring="daily"), lang_code=(await dbmod.get_user_prefs(chat_id))[0])
-        return
-
-    if data == "time_custom":
-        state, temp = await dbmod.get_state(chat_id)
-        await dbmod.set_state(chat_id, "awaiting_custom_time", temp or {})
-        await send_message(chat_id, T['ask_custom_time'])
-        return
-
-    if data.startswith("set_lang_"):
-        new_lang = data.split("_",2)[2]
+    # --- settings actions ---
+    if data == "set_lang_uz" or data == "set_lang_ru" or data == "set_lang_en":
+        new_lang = data.split("_")[-1]
         await dbmod.set_user_prefs(chat_id, language=new_lang)
-        await send_message(chat_id, T['lang_set'].format(lang=new_lang))
+        await send_message(chat_id, T["lang_set"].format(lang=new_lang))
         return
 
     if data == "toggle_voice":
         current = (await dbmod.get_user_prefs(chat_id))[1]
         await dbmod.set_user_prefs(chat_id, voice_enabled=0 if current else 1)
-        await send_message(chat_id, T['voice_off'] if current else T['voice_on'])
+        await send_message(chat_id, T["voice_off"] if current else T["voice_on"])
         return
 
-    if data.startswith("del_"):
+    if data == "tz_auto":
+        await send_message(chat_id, "⏱ Vaqt zonasi hozircha avtomatik Asia/Tashkent.")
+        return
+
+    if data == "back_main":
+        await send_message(chat_id, T["start_menu"], reply_markup=ui.main_menu(lang_code))
+        return
+
+    # --- time choices ---
+    if data.startswith("time_"):
+        time_chosen = data.split("_",1)[1]
+        state, temp = await dbmod.get_state(chat_id)
+        title = (temp or {}).get("title")
+        if not title:
+            await dbmod.set_state(chat_id, "awaiting_med_name", {})
+            await send_message(chat_id, T["ask_med_name"])
+            return
+        await dbmod.add_reminder(chat_id, title, time_chosen, "daily")
+        await dbmod.clear_state(chat_id)
+        msg = T["added"].format(title=title, time=time_chosen, recurring="daily")
+        await send_message(chat_id, msg)
+        if voice_on:
+            await send_voice(chat_id, msg, lang_code=lang_code)
+        return
+
+    if data == "custom_time":
+        state, temp = await dbmod.get_state(chat_id)
+        await dbmod.set_state(chat_id, "awaiting_custom_time", temp or {})
+        await send_message(chat_id, T["ask_custom_time"])
+        return
+
+    # --- delete ---
+    if data.startswith("delete_"):
         rid = int(data.split("_",1)[1])
         await dbmod.delete_reminder(rid)
-        await send_message(chat_id, T['confirm_delete'])
+        await send_message(chat_id, T["confirm_delete"])
         return
 
     # fallback
