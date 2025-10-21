@@ -1,21 +1,24 @@
 
-import os, asyncio, logging, json
+import os, asyncio, logging, json, aiosqlite, time
 from datetime import datetime
 from fastapi import FastAPI, Request, BackgroundTasks
 import aiohttp, uvicorn
 
 from utils import dbmod, schedmod, ui, voice, lang
+import bot_handlers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("pillbot.webhook")
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
+# Config
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT = os.getenv("ADMIN_CHAT", "")
 BASE_URL = os.getenv("BASE_URL", "https://pillbot-4-6.onrender.com")
 WEBHOOK_URL = f"{BASE_URL}/webhook"
 ENABLE_VOICE = os.getenv("ENABLE_VOICE", "True").lower() in ("1","true","yes")
 VOICE_LANG = os.getenv("VOICE_LANG", "uz")
-PORT = int(os.getenv("PORT", 8080))
+PORT = int(os.getenv("PORT", 10000))
 
 if not TOKEN:
     raise RuntimeError("Missing TELEGRAM_TOKEN environment variable")
@@ -24,6 +27,7 @@ BOT_API = f"https://api.telegram.org/bot{TOKEN}"
 
 app = FastAPI()
 
+# simple root endpoint so Render sees 200
 @app.get("/")
 async def root():
     return {
@@ -37,31 +41,6 @@ async def root():
 @app.get("/ping")
 async def ping():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
-
-@app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    log.debug("Incoming update keys: %s", list(data.keys()))
-    try:
-        if "message" in data:
-            from bot_handlers import handle_message as _handle_message
-            background_tasks.add_task(_handle_message, data, send_message, send_voice)
-        if "callback_query" in data:
-            cq = data["callback_query"]
-            cid = cq.get("id")
-            payload = cq.get("data","")
-            msg = cq.get("message",{})
-            chat_id = msg.get("chat",{}).get("id")
-            try:
-                async with aiohttp.ClientSession() as session:
-                    await session.post(f"{BOT_API}/answerCallbackQuery", json={"callback_query_id": cid}, timeout=5)
-            except Exception:
-                pass
-            from bot_handlers import handle_callback as _handle_callback
-            background_tasks.add_task(_handle_callback, cq, send_message, send_voice)
-    except Exception as e:
-        log.exception("Error processing update: %s", e)
-    return {"ok": True}
 
 async def send_message(chat_id, text, reply_markup=None):
     payload = {"chat_id": chat_id, "text": text}
@@ -86,6 +65,7 @@ async def send_voice(chat_id, text, lang_code="uz"):
     except Exception as e:
         log.warning("send_voice failed: %s", e)
 
+# Webhook maintenance
 async def ensure_webhook_once():
     try:
         async with aiohttp.ClientSession() as session:
@@ -113,15 +93,50 @@ async def self_ping_once():
             async with session.get(BASE_URL, timeout=10) as r:
                 if r.status == 200:
                     log.info("Self-ping OK")
+                else:
+                    log.warning("Self-ping status %s", r.status)
     except Exception as e:
         log.warning("Self-ping failed: %s", e)
+
+async def cleanup_logs():
+    # Keep only latest N log files in /tmp (if your app writes them) - here placeholder
+    # This function scheduled daily to avoid log bloat
+    log.info("cleanup_logs: placeholder (nothing to delete in this environment)")
 
 async def schedule_keepalive():
     try:
         schedmod.start_scheduler()
         schedmod.schedule_ping(14, self_ping_once)
+        # schedule daily cleanup
+        schedmod.sched.add_job(lambda: asyncio.ensure_future(cleanup_logs()), 'interval', hours=24, id='cleanup_logs', replace_existing=True)
     except Exception as e:
         log.warning("schedule_keepalive error: %s", e)
+
+# Webhook endpoint
+@app.post("/webhook")
+async def webhook(request: Request, background_tasks: BackgroundTasks):
+    data = await request.json()
+    log.debug("Incoming update raw: %s", data)
+    try:
+        # messages
+        if "message" in data:
+            # delegate to handler in background
+            background_tasks.add_task(bot_handlers.handle_message, data, send_message, send_voice)
+        # callback_query
+        if "callback_query" in data:
+            cq = data["callback_query"]
+            cid = cq.get("id")
+            # immediately answer callback to remove client spinner
+            try:
+                async with aiohttp.ClientSession() as sess:
+                    await sess.post(f"{BOT_API}/answerCallbackQuery", json={"callback_query_id": cid}, timeout=5)
+            except Exception as e:
+                log.warning("answerCallbackQuery failed: %s", e)
+            # delegate handling to background
+            background_tasks.add_task(bot_handlers.handle_callback, cq, send_message, send_voice)
+    except Exception as e:
+        log.exception("Webhook processing error: %s", e)
+    return {"ok": True}
 
 @app.on_event("startup")
 async def startup_event():
@@ -139,6 +154,7 @@ async def initialize_app():
         log.warning("schedule_keepalive failed: %s", e)
     asyncio.create_task(ensure_webhook_once())
     asyncio.create_task(periodic_webhook_check())
+    # notify admin if set
     if ADMIN_CHAT:
         try:
             await send_message(ADMIN_CHAT, f"✅ PillBot 4.6 (Webhook Stable) started at {datetime.utcnow().isoformat()}")
